@@ -1,17 +1,30 @@
-"""Low-level adjacent interaction rules for DigitalLife V1.
+"""Rotationally symmetric four-neighbor interaction rules for DigitalLife V1.
 
-The universe is a fixed binary lattice.  A rule application is centered on one
-ordered adjacent pair A-B and may only rewrite that pair.  It may inspect one
-cell immediately behind and ahead of the pair:
+The universe is a fixed binary lattice.  A potential microscopic event starts
+from a center site C=1 and one selected orthogonal neighbor T=0.  The complete
+Von Neumann neighborhood is read from the frozen tick snapshot:
 
-    L A B R
+        U
+        |
+    L - C - R
+        |
+        D
 
-The four-bit context is encoded as 8*L + 4*A + 2*B + R.  A rule table contains
-16 entries.  Each entry is a two-bit output A'B' in [0, 3].
+For each candidate target direction, the other three neighbors are expressed
+in the target-relative frame as LEFT, BACK, RIGHT.  The same rule is therefore
+used for up, right, down, and left without a built-in compass preference.
+
+Because C=1 and T=0 are fixed for an active candidate, only the other three
+neighbor bits vary.  They form an index in [0, 7]:
+
+    context = 4*LEFT + 2*BACK + RIGHT
+
+A rule contains eight binary decisions.  0 means no event; 1 means propose the
+local exchange 1,0 -> 0,1 between C and T.  Every accepted event therefore
+conserves the total number of 1 bits exactly.
 
 No rule knows about particles, velocity, force, bonds, life, replication, or
-fitness.  Conservation is enforced at the microscopic interaction boundary:
-the number of 1 bits in A-B must equal the number in A'-B'.
+fitness.
 """
 
 from __future__ import annotations
@@ -21,55 +34,24 @@ from collections.abc import Iterator
 import numpy as np
 
 
-def _pair_from_context(state: int) -> int:
-    """Extract A-B from the L-A-B-R context as a two-bit integer."""
-    a = (state >> 2) & 1
-    b = (state >> 1) & 1
-    return (a << 1) | b
-
-
 def validate_rule(rule: np.ndarray) -> None:
-    """Validate a 16-context adjacent-pair rule.
-
-    V1 requires only microscopic number conservation.  Equal pairs (00, 11)
-    therefore cannot change; mixed pairs (01, 10) may either stay or swap.
-    """
+    """Validate one rotationally shared 3-bit-context rule table."""
     rule = np.asarray(rule)
-    if rule.shape != (16,):
-        raise ValueError("an adjacent interaction rule must contain 16 outputs")
-
-    values = [int(x) for x in rule]
-    if any(x < 0 or x > 3 for x in values):
-        raise ValueError("rule outputs must be two-bit pair states in [0, 3]")
-
-    for state, out in enumerate(values):
-        pair = _pair_from_context(state)
-        if pair.bit_count() != out.bit_count():
-            raise ValueError(f"rule does not conserve 1 bits at context {state:04b}")
+    if rule.shape != (8,):
+        raise ValueError("a four-neighbor rule must contain exactly 8 decisions")
+    if not np.all((rule == 0) | (rule == 1)):
+        raise ValueError("rule decisions must be binary: 0=no proposal, 1=swap")
 
 
 def rule_from_mask(mask: int) -> np.ndarray:
-    """Build one of all 256 conservative V1 rules.
+    """Build one of all 256 conservative four-neighbor rules.
 
-    There are eight contexts whose selected pair is mixed (01 or 10).  Each
-    such context independently chooses either STAY or SWAP, so the complete
-    conservative rule space has 2**8 == 256 members.  ``mask`` encodes those
-    eight binary choices in context-number order.
+    There are eight possible LEFT/BACK/RIGHT contexts and each independently
+    chooses NO-OP or SWAP, so the complete V1 rule space is 2**8 == 256.
     """
     if mask < 0 or mask >= 256:
         raise ValueError("mask must be in [0, 255]")
-
-    table = np.empty(16, dtype=np.uint8)
-    choice_index = 0
-    for state in range(16):
-        pair = _pair_from_context(state)
-        if pair in (1, 2):
-            swap = (mask >> choice_index) & 1
-            table[state] = 3 - pair if swap else pair
-            choice_index += 1
-        else:
-            table[state] = pair
-
+    table = np.array([(mask >> i) & 1 for i in range(8)], dtype=np.uint8)
     validate_rule(table)
     return table
 
@@ -81,13 +63,17 @@ def conservative_rules() -> Iterator[np.ndarray]:
 
 
 def _baseline_rule() -> np.ndarray:
-    """A non-biological baseline: swap a mixed pair when L and R differ."""
-    table = np.empty(16, dtype=np.uint8)
-    for state in range(16):
-        left = (state >> 3) & 1
-        right = state & 1
-        pair = _pair_from_context(state)
-        table[state] = 3 - pair if pair in (1, 2) and left != right else pair
+    """Low-level baseline: propose when LEFT and RIGHT differ.
+
+    This has no absolute directional preference.  An isolated 1 sees the same
+    symmetric context in all four directions and therefore does not move.
+    Asymmetric multi-bit neighborhoods can generate directional proposals.
+    """
+    table = np.zeros(8, dtype=np.uint8)
+    for context in range(8):
+        left = (context >> 2) & 1
+        right = context & 1
+        table[context] = int(left != right)
     validate_rule(table)
     return table
 
