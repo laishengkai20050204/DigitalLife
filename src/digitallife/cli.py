@@ -1,15 +1,15 @@
-"""Command-line runner for DigitalLife V0."""
+"""Command-line runner for DigitalLife V1."""
 
 from __future__ import annotations
 
 import argparse
 
 from .observe import observe
-from .world import BinaryWorld
+from .world import BinaryWorld, StepStats
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the DigitalLife V0 universe")
+    parser = argparse.ArgumentParser(description="Run the DigitalLife V1 universe")
     parser.add_argument("--width", type=int, default=128)
     parser.add_argument("--height", type=int, default=128)
     parser.add_argument("--density", type=float, default=0.20)
@@ -33,6 +33,7 @@ def main() -> None:
     )
 
     initial_ones = world.ones
+    last_stats = StepStats(proposed=0, accepted=0, cancelled_conflicts=0)
 
     def report() -> None:
         obs = observe(world)
@@ -40,8 +41,11 @@ def main() -> None:
             f"tick={obs.tick} "
             f"ones={obs.ones} "
             f"density={obs.density:.6f} "
-            f"block_entropy={obs.block_entropy_bits:.6f} "
-            f"active_microstates={obs.active_microstates}/16"
+            f"local_entropy={obs.local_entropy_bits:.6f} "
+            f"active_microstates={obs.active_microstates}/16 "
+            f"proposed={last_stats.proposed} "
+            f"accepted={last_stats.accepted} "
+            f"conflicts={last_stats.cancelled_conflicts}"
         )
         if args.show_ascii:
             print(world.ascii())
@@ -49,9 +53,9 @@ def main() -> None:
 
     report()
     for _ in range(args.steps):
-        world.step()
+        last_stats = world.step()
         if world.ones != initial_ones:
-            raise RuntimeError("V0 conservation invariant violated: number of 1 bits changed")
+            raise RuntimeError("V1 conservation invariant violated: number of 1 bits changed")
         if world.tick % args.report_every == 0:
             report()
 
