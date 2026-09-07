@@ -42,7 +42,7 @@ def main() -> None:
             f"ones={obs.ones} "
             f"density={obs.density:.6f} "
             f"local_entropy={obs.local_entropy_bits:.6f} "
-            f"active_microstates={obs.active_microstates}/16 "
+            f"active_microstates={obs.active_microstates}/32 "
             f"proposed={last_stats.proposed} "
             f"accepted={last_stats.accepted} "
             f"conflicts={last_stats.cancelled_conflicts}"
