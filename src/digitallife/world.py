@@ -1,4 +1,4 @@
-"""Binary 2D universe with alternating Margolus block updates."""
+"""Fixed binary 2D universe with snapshot-based adjacent interactions."""
 
 from __future__ import annotations
 
@@ -6,15 +6,28 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .rule import V0_RULE, validate_rule
+from .rule import V1_RULE, validate_rule
+
+
+@dataclass(frozen=True, slots=True)
+class StepStats:
+    proposed: int
+    accepted: int
+    cancelled_conflicts: int
 
 
 @dataclass(slots=True)
 class BinaryWorld:
-    """A toroidal 2D binary lattice.
+    """A toroidal fixed 2D binary lattice.
 
-    The world contains no object model for particles or organisms. Its complete
-    physical state is the binary grid plus the current partition phase.
+    Every tick is transactional:
+    1. freeze the current grid as an immutable snapshot;
+    2. evaluate every horizontal and vertical adjacent interaction from it;
+    3. cancel every active proposal that shares a written cell with another;
+    4. commit the remaining disjoint proposals simultaneously.
+
+    No repartitioning occurs and no update can observe another update from the
+    same tick.
     """
 
     grid: np.ndarray
@@ -24,8 +37,8 @@ class BinaryWorld:
         grid = np.asarray(self.grid, dtype=np.uint8)
         if grid.ndim != 2:
             raise ValueError("grid must be a 2D array")
-        if grid.shape[0] % 2 or grid.shape[1] % 2:
-            raise ValueError("world width and height must both be even")
+        if grid.shape[0] <= 0 or grid.shape[1] <= 0:
+            raise ValueError("world width and height must be positive")
         if not np.all((grid == 0) | (grid == 1)):
             raise ValueError("grid must contain only 0 and 1")
         self.grid = grid.copy()
@@ -38,8 +51,8 @@ class BinaryWorld:
         density: float = 0.2,
         seed: int | None = None,
     ) -> "BinaryWorld":
-        if height <= 0 or width <= 0 or height % 2 or width % 2:
-            raise ValueError("height and width must be positive even integers")
+        if height <= 0 or width <= 0:
+            raise ValueError("height and width must be positive integers")
         if not 0.0 <= density <= 1.0:
             raise ValueError("density must be between 0 and 1")
 
@@ -55,33 +68,89 @@ class BinaryWorld:
     def density(self) -> float:
         return float(self.grid.mean())
 
-    def step(self, rule: np.ndarray = V0_RULE) -> None:
-        """Advance the universe by one tick using only local 2x2 updates."""
+    @staticmethod
+    def _edge_proposals(
+        snapshot: np.ndarray,
+        rule: np.ndarray,
+        axis: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Evaluate every directed +axis adjacent edge from one snapshot.
+
+        For each anchor A, B is the next cell in the positive axis direction.
+        L and R are one cell behind A and one cell beyond B.  The same 16-entry
+        rule is used for horizontal and vertical edges, so the mechanism itself
+        does not require separate x/y physics tables.
+        """
+        left = np.roll(snapshot, shift=1, axis=axis)
+        a = snapshot
+        b = np.roll(snapshot, shift=-1, axis=axis)
+        right = np.roll(snapshot, shift=-2, axis=axis)
+
+        context = (left << 3) | (a << 2) | (b << 1) | right
+        out = rule[context]
+        out_a = (out >> 1) & 1
+        out_b = out & 1
+        active = (out_a != a) | (out_b != b)
+        return active, out_a, out_b
+
+    def step(self, rule: np.ndarray = V1_RULE) -> StepStats:
+        """Advance one tick from a frozen snapshot and return interaction stats."""
         validate_rule(rule)
-        phase = self.tick & 1
+        snapshot = self.grid.copy()
 
-        # Move the active Margolus partition to the origin. np.roll makes the
-        # world toroidal, so no cell receives special boundary behavior.
-        shifted = np.roll(self.grid, shift=(-phase, -phase), axis=(0, 1))
+        h_active, h_out_a, h_out_b = self._edge_proposals(snapshot, rule, axis=1)
+        v_active, v_out_a, v_out_b = self._edge_proposals(snapshot, rule, axis=0)
 
-        tl = shifted[0::2, 0::2]
-        tr = shifted[0::2, 1::2]
-        bl = shifted[1::2, 0::2]
-        br = shifted[1::2, 1::2]
+        # Every active edge wants to write both of its endpoints.  Count how
+        # many active proposals touch each site.  Snapshot reads never conflict;
+        # only overlapping writes do.
+        touch_count = (
+            h_active.astype(np.uint8)
+            + np.roll(h_active, shift=1, axis=1).astype(np.uint8)
+            + v_active.astype(np.uint8)
+            + np.roll(v_active, shift=1, axis=0).astype(np.uint8)
+        )
 
-        states = (tl << 3) | (tr << 2) | (bl << 1) | br
-        outputs = rule[states]
+        h_accept = (
+            h_active
+            & (touch_count == 1)
+            & (np.roll(touch_count, shift=-1, axis=1) == 1)
+        )
+        v_accept = (
+            v_active
+            & (touch_count == 1)
+            & (np.roll(touch_count, shift=-1, axis=0) == 1)
+        )
 
-        next_shifted = np.empty_like(shifted)
-        next_shifted[0::2, 0::2] = (outputs >> 3) & 1
-        next_shifted[0::2, 1::2] = (outputs >> 2) & 1
-        next_shifted[1::2, 0::2] = (outputs >> 1) & 1
-        next_shifted[1::2, 1::2] = outputs & 1
+        next_grid = snapshot.copy()
 
-        self.grid = np.roll(next_shifted, shift=(phase, phase), axis=(0, 1))
+        # Horizontal A endpoints.
+        next_grid[h_accept] = h_out_a[h_accept]
+        # Horizontal B endpoints: shift anchor-aligned outputs onto B sites.
+        h_b_accept = np.roll(h_accept, shift=1, axis=1)
+        h_b_values = np.roll(h_out_b, shift=1, axis=1)
+        next_grid[h_b_accept] = h_b_values[h_b_accept]
+
+        # Vertical A endpoints.
+        next_grid[v_accept] = v_out_a[v_accept]
+        # Vertical B endpoints.
+        v_b_accept = np.roll(v_accept, shift=1, axis=0)
+        v_b_values = np.roll(v_out_b, shift=1, axis=0)
+        next_grid[v_b_accept] = v_b_values[v_b_accept]
+
+        proposed = int(h_active.sum() + v_active.sum())
+        accepted = int(h_accept.sum() + v_accept.sum())
+
+        self.grid = next_grid
         self.tick += 1
 
-    def run(self, steps: int, rule: np.ndarray = V0_RULE) -> None:
+        return StepStats(
+            proposed=proposed,
+            accepted=accepted,
+            cancelled_conflicts=proposed - accepted,
+        )
+
+    def run(self, steps: int, rule: np.ndarray = V1_RULE) -> None:
         if steps < 0:
             raise ValueError("steps must be non-negative")
         for _ in range(steps):
