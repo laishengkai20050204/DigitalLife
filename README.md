@@ -4,76 +4,99 @@ DigitalLife is an experiment in **bottom-up digital evolution**.
 
 The project does not start from an AI model, neural network, genome, organism, reward function, or hand-written notion of life. It starts from a minimal digital universe and asks whether increasingly complex structures can emerge from local interactions alone.
 
-## V0 research question
+## V1 research question
 
-> Can a universe made only of binary local state, local update rules, and time produce persistent structures, moving structures, bound structures, replication, variation, and eventually Darwinian evolution without those concepts being encoded explicitly?
+> Can a fixed universe made only of binary local state, local adjacent interactions, and time produce persistent structures, moving structures, bound structures, replication, variation, and eventually Darwinian evolution without those concepts being encoded explicitly?
 
-## V0 axioms
-
-The initial universe intentionally contains as little semantics as possible:
+## V1 axioms
 
 1. **Binary state** — every lattice site is either `0` or `1`.
-2. **Two-dimensional space** — the universe is an even-sized 2D lattice.
-3. **Locality** — updates only inspect one local `2 x 2` block.
-4. **Discrete time** — the universe advances in ticks.
-5. **Margolus partitioning** — the `2 x 2` block partition shifts by one cell every tick so information can propagate between blocks.
-6. **Conservation** — the number of `1` bits is preserved exactly.
-7. **Reversibility** — the V0 local transition is an involution: applying the same local transition twice returns the original local state.
-8. **No predefined high-level objects** — there is no particle class, mass, force, energy variable, bond, molecule, genome, organism, reproduction operation, fitness function, neural network, or intelligence score.
+2. **Fixed two-dimensional space** — coordinates and adjacency never get repartitioned.
+3. **Locality** — physical changes can only rewrite two adjacent sites.
+4. **Snapshot time** — every tick begins by freezing the complete current state. Every interaction in that tick reads only that snapshot.
+5. **Simultaneous commit** — accepted changes are written only after all candidate interactions have been evaluated.
+6. **Conflict cancellation** — if two active interaction instances want to write any common site during the same tick, all overlapping instances are cancelled for that tick. No scan order or arbitrary winner decides physics.
+7. **Conservation** — every accepted adjacent interaction preserves the number of `1` bits, so the world preserves it globally.
+8. **No predefined high-level objects** — there is no particle ID, velocity field, mass, force, energy variable, bond, molecule, genome, organism, reproduction operation, fitness function, neural network, or intelligence score.
 9. **Toroidal boundary** — the top joins the bottom and the left joins the right. There are no special edge cells.
 
 The simulator may measure emergent behavior from outside, but measurements never affect the universe.
 
-## Local physics
+## Adjacent interaction rule
 
-A `2 x 2` block contains four bits and therefore has only 16 possible microstates.
+There are no `2 x 2` computational blocks and no Margolus repartitioning.
 
-Bits are encoded as:
-
-```text
-8 4
-2 1
-```
-
-The current V0 rule is a conservative reversible collision rule:
-
-- empty and full blocks remain unchanged;
-- one-bit states move to the opposite corner;
-- adjacent two-bit states move to the opposite edge;
-- diagonal two-bit states transform into the other diagonal;
-- three-bit states rotate by 180 degrees.
-
-The complete lookup table is:
+Instead, every horizontal and vertical adjacent pair `A-B` is a possible local interaction. The interaction is allowed to inspect one site immediately behind and ahead of the pair:
 
 ```text
-0  -> 0
-1  -> 8
-2  -> 4
-3  -> 12
-4  -> 2
-5  -> 10
-6  -> 9
-7  -> 14
-8  -> 1
-9  -> 6
-10 -> 5
-11 -> 13
-12 -> 3
-13 -> 11
-14 -> 7
-15 -> 15
+L A B R
 ```
 
-This table is not intended to encode life. It only supplies a tiny local dynamics with transport and collisions. Future research should search over other rule tables subject to low-level constraints rather than hand-coding biological behavior.
+This is still local: only `A` and `B` may change. `L` and `R` are read-only context from the tick snapshot.
+
+The four context bits give 16 possible local input states:
+
+```text
+0000 ... 1111
+```
+
+A rule entry outputs only the next two-bit state `A'B'`.
+
+V1 currently enforces microscopic conservation. Therefore:
+
+- `00 -> 00`
+- `11 -> 11`
+- a mixed pair `01` may either stay `01` or swap to `10`
+- a mixed pair `10` may either stay `10` or swap to `01`
+
+Across the 16 contexts, exactly eight contain a mixed selected pair. Each has two conservative choices, so the complete V1 conservative rule-search space is:
+
+```text
+2^8 = 256 rules
+```
+
+The current `V1_RULE` is only a non-biological baseline. It swaps a mixed pair when the two outer context bits differ. It is not intended as the final physics. The research path is to evaluate all legal rules and later enlarge the interaction context if the 256-rule space is too weak.
+
+## Tick transaction
+
+For each tick:
+
+```text
+S_t
+  |
+  +--> freeze immutable snapshot
+  |
+  +--> evaluate every adjacent horizontal/vertical interaction
+  |
+  +--> collect active write proposals
+  |
+  +--> cancel every proposal that overlaps another proposal
+  |
+  +--> commit all remaining disjoint proposals simultaneously
+  v
+S_(t+1)
+```
+
+This design prevents update-order artifacts without dynamically changing who is adjacent to whom.
+
+A conflict is an event in one tick, not a permanent defect in the rule table. The conflicting *instances* are cancelled; the rule itself remains available in other local contexts. Permanently deleting any rule that ever conflicts would strongly bias the search toward trivial no-op physics.
+
+## Important consequence of binary symmetry
+
+An isolated `1` in a perfectly symmetric environment has no internal direction state. A deterministic symmetric law therefore has no physical reason to choose left instead of right, or up instead of down.
+
+DigitalLife intentionally does not solve that by adding a hidden velocity or direction field. If directed motion emerges, it should preferably arise from an asymmetric multi-bit pattern rather than from a prewritten particle velocity.
 
 ## What counts as an observation, not a rule
 
-Terms such as these are descriptions an external observer may use if corresponding patterns appear:
+These words are observer-side descriptions only:
 
 ```text
+particle
+motion
 persistent pattern
-moving pattern
 bound state
+collision
 catalysis
 self-maintenance
 replication
@@ -112,4 +135,4 @@ digitallife --seed 42
 
 ## Current scope
 
-V0 is deliberately only a **digital physics sandbox**. It does not claim that the current rule will generate life. Its purpose is to provide a clean experimental base from which rule search, pattern detection, long-run experiments, and open-ended evolution research can be added without contaminating the universe with high-level biological assumptions.
+V1 is deliberately only a **digital physics sandbox**. It does not claim that the current rule will generate life. Its purpose is to provide a clean experimental base for exhaustive rule search, pattern detection, collision analysis, long-run experiments, and eventually open-ended digital evolution without contaminating the universe with high-level biological assumptions.
