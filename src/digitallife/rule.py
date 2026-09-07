@@ -1,57 +1,95 @@
-"""Local binary physics for DigitalLife V0.
+"""Low-level adjacent interaction rules for DigitalLife V1.
 
-A 2x2 block is encoded as:
+The universe is a fixed binary lattice.  A rule application is centered on one
+ordered adjacent pair A-B and may only rewrite that pair.  It may inspect one
+cell immediately behind and ahead of the pair:
 
-    8 4
-    2 1
+    L A B R
 
-The rule is deliberately low level. It knows nothing about particles, forces,
-bonds, life, replication, or fitness. It only maps one 4-bit microstate to
-another 4-bit microstate.
+The four-bit context is encoded as 8*L + 4*A + 2*B + R.  A rule table contains
+16 entries.  Each entry is a two-bit output A'B' in [0, 3].
+
+No rule knows about particles, velocity, force, bonds, life, replication, or
+fitness.  Conservation is enforced at the microscopic interaction boundary:
+the number of 1 bits in A-B must equal the number in A'-B'.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import numpy as np
 
-# Conservative, reversible (involutive) 2x2 Margolus block rule.
-# Index = input 4-bit block, value = output 4-bit block.
-V0_RULE = np.array(
-    [0, 8, 4, 12, 2, 10, 9, 14, 1, 6, 5, 13, 3, 11, 7, 15],
-    dtype=np.uint8,
-)
+
+def _pair_from_context(state: int) -> int:
+    """Extract A-B from the L-A-B-R context as a two-bit integer."""
+    a = (state >> 2) & 1
+    b = (state >> 1) & 1
+    return (a << 1) | b
 
 
-def bit_count(state: int) -> int:
-    """Return the number of 1 bits in a 4-bit block state."""
-    return int(state).bit_count()
+def validate_rule(rule: np.ndarray) -> None:
+    """Validate a 16-context adjacent-pair rule.
 
-
-def validate_rule(rule: np.ndarray = V0_RULE) -> None:
-    """Validate the low-level invariants required by the V0 universe.
-
-    V0 requires:
-    - exactly 16 outputs in the range [0, 15];
-    - bijectivity;
-    - local reversibility by involution: T(T(x)) == x;
-    - exact conservation of the number of 1 bits.
+    V1 requires only microscopic number conservation.  Equal pairs (00, 11)
+    therefore cannot change; mixed pairs (01, 10) may either stay or swap.
     """
+    rule = np.asarray(rule)
     if rule.shape != (16,):
-        raise ValueError("A 2x2 binary rule must contain exactly 16 outputs")
+        raise ValueError("an adjacent interaction rule must contain 16 outputs")
 
     values = [int(x) for x in rule]
-    if any(x < 0 or x > 15 for x in values):
-        raise ValueError("Rule outputs must be 4-bit states in [0, 15]")
+    if any(x < 0 or x > 3 for x in values):
+        raise ValueError("rule outputs must be two-bit pair states in [0, 3]")
 
-    if len(set(values)) != 16:
-        raise ValueError("V0 rule must be bijective")
+    for state, out in enumerate(values):
+        pair = _pair_from_context(state)
+        if pair.bit_count() != out.bit_count():
+            raise ValueError(f"rule does not conserve 1 bits at context {state:04b}")
 
+
+def rule_from_mask(mask: int) -> np.ndarray:
+    """Build one of all 256 conservative V1 rules.
+
+    There are eight contexts whose selected pair is mixed (01 or 10).  Each
+    such context independently chooses either STAY or SWAP, so the complete
+    conservative rule space has 2**8 == 256 members.  ``mask`` encodes those
+    eight binary choices in context-number order.
+    """
+    if mask < 0 or mask >= 256:
+        raise ValueError("mask must be in [0, 255]")
+
+    table = np.empty(16, dtype=np.uint8)
+    choice_index = 0
     for state in range(16):
-        out = int(rule[state])
-        if int(rule[out]) != state:
-            raise ValueError(f"Rule is not involutive at state {state}")
-        if bit_count(state) != bit_count(out):
-            raise ValueError(f"Rule does not conserve 1 bits at state {state}")
+        pair = _pair_from_context(state)
+        if pair in (1, 2):
+            swap = (mask >> choice_index) & 1
+            table[state] = 3 - pair if swap else pair
+            choice_index += 1
+        else:
+            table[state] = pair
+
+    validate_rule(table)
+    return table
 
 
-validate_rule()
+def conservative_rules() -> Iterator[np.ndarray]:
+    """Yield the complete 256-rule conservative V1 search space."""
+    for mask in range(256):
+        yield rule_from_mask(mask)
+
+
+def _baseline_rule() -> np.ndarray:
+    """A non-biological baseline: swap a mixed pair when L and R differ."""
+    table = np.empty(16, dtype=np.uint8)
+    for state in range(16):
+        left = (state >> 3) & 1
+        right = state & 1
+        pair = _pair_from_context(state)
+        table[state] = 3 - pair if pair in (1, 2) and left != right else pair
+    validate_rule(table)
+    return table
+
+
+V1_RULE = _baseline_rule()
