@@ -14,24 +14,23 @@ class Observation:
     tick: int
     ones: int
     density: float
-    block_entropy_bits: float
+    local_entropy_bits: float
     active_microstates: int
 
 
-def block_histogram(grid: np.ndarray, phase: int = 0) -> np.ndarray:
-    """Count the 16 possible 2x2 microstates in one Margolus partition."""
-    shifted = np.roll(grid, shift=(-phase, -phase), axis=(0, 1))
-    tl = shifted[0::2, 0::2]
-    tr = shifted[0::2, 1::2]
-    bl = shifted[1::2, 0::2]
-    br = shifted[1::2, 1::2]
+def local_2x2_histogram(grid: np.ndarray) -> np.ndarray:
+    """Count all 16 sliding 2x2 patterns on the toroidal fixed lattice."""
+    tl = grid
+    tr = np.roll(grid, shift=-1, axis=1)
+    bl = np.roll(grid, shift=-1, axis=0)
+    br = np.roll(tr, shift=-1, axis=0)
     states = ((tl << 3) | (tr << 2) | (bl << 1) | br).ravel()
     return np.bincount(states, minlength=16)
 
 
-def block_entropy_bits(grid: np.ndarray, phase: int = 0) -> float:
-    """Shannon entropy of local 2x2 microstate frequencies, in bits."""
-    counts = block_histogram(grid, phase)
+def local_entropy_bits(grid: np.ndarray) -> float:
+    """Shannon entropy of sliding local 2x2 pattern frequencies, in bits."""
+    counts = local_2x2_histogram(grid)
     total = counts.sum()
     if total == 0:
         return 0.0
@@ -40,11 +39,11 @@ def block_entropy_bits(grid: np.ndarray, phase: int = 0) -> float:
 
 
 def observe(world: BinaryWorld) -> Observation:
-    hist = block_histogram(world.grid, world.tick & 1)
+    hist = local_2x2_histogram(world.grid)
     return Observation(
         tick=world.tick,
         ones=world.ones,
         density=world.density,
-        block_entropy_bits=block_entropy_bits(world.grid, world.tick & 1),
+        local_entropy_bits=local_entropy_bits(world.grid),
         active_microstates=int(np.count_nonzero(hist)),
     )
